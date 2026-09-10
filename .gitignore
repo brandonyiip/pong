@@ -1,0 +1,17 @@
+# Unreal Engine Generated Directories
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+
+# Visual Studio User Files & Caches
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
