@@ -1,6 +1,7 @@
 #include "Props/PongBall.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "TimerManager.h"
 
 APongBall::APongBall() {
 	PrimaryActorTick.bCanEverTick = false;
@@ -33,10 +34,10 @@ void APongBall::BeginPlay() {
 		CollisionComp->BodyInstance.bLockYRotation = true;
 		CollisionComp->BodyInstance.bLockZRotation = true;
 
-		// Bind hit delegate
-		CollisionComp->OnComponentHit.RemoveDynamic(this, &APongBall::OnBallHit);
+		CollisionComp->BodyInstance.bUseCCD = true;
 		CollisionComp->OnComponentHit.AddDynamic(this, &APongBall::OnBallHit);
 
+		// Initial ball spawn delay
 		ResetBall();
 	}
 }
@@ -45,37 +46,32 @@ void APongBall::Tick(float DeltaTime) {
 	Super::Tick(DeltaTime);
 }
 
-void APongBall::OnBallHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit) {
-	if (GEngine) {
-		GEngine->AddOnScreenDebugMessage(-1, 15.0f, FColor::Yellow, TEXT("Inside OnBallHit!"));
-	}
-
-	if (!OtherActor || OtherActor == this) return;
-
-	if (OtherActor->ActorHasTag(TEXT("Paddle"))) {
-		if (GEngine) {
-			GEngine->AddOnScreenDebugMessage(-1, 15.0f, FColor::Yellow, TEXT("inside of paddle"));
-		}
-
-		FVector CurrentVelocity = CollisionComp->GetPhysicsLinearVelocity();
-		float CurrentSpeed = CurrentVelocity.Size();
-
-		if (GEngine) {
-			GEngine->AddOnScreenDebugMessage(-1, 15.0f, FColor::Yellow, FString::Printf(TEXT("CurrentSpeed: %.2f"), CurrentSpeed));
-		}
-
-		float NewSpeed = CurrentSpeed + SpeedIncrement;
-		FVector NewVelocity = CurrentVelocity.GetSafeNormal() * NewSpeed;
-		CollisionComp->SetPhysicsLinearVelocity(NewVelocity);
-	}
-}
-
 void APongBall::ResetBall() {
+	if (!CollisionComp) return;
+
+	// 1. Freeze movement and reset position immediately
 	CollisionComp->SetPhysicsLinearVelocity(FVector::ZeroVector);
 	CollisionComp->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 	SetActorLocation(InitialSpawnLocation);
 
-	float LaunchDirectionX = -1.0f;
+	// 2. Clear any existing timer to avoid duplicate triggers
+	GetWorldTimerManager().ClearTimer(LaunchTimerHandle);
+
+	// 3. Schedule LaunchBall after ResetDelaySeconds
+	GetWorldTimerManager().SetTimer(
+		LaunchTimerHandle,
+		this,
+		&APongBall::LaunchBall,
+		ResetDelaySeconds,
+		false
+	);
+}
+
+void APongBall::LaunchBall() {
+	if (!CollisionComp) return;
+
+	// Calculate random launch angle
+	float LaunchDirectionX = FMath::RandBool() ? 1.0f : -1.0f;
 
 	float RandomAngleDegrees = FMath::RandRange(-MaxLaunchAngleDegrees, MaxLaunchAngleDegrees);
 	float AngleRadians = FMath::DegreesToRadians(RandomAngleDegrees);
@@ -87,6 +83,38 @@ void APongBall::ResetBall() {
 
 	LaunchDirection.Normalize();
 
+	// Apply initial launch velocity
 	CollisionComp->SetPhysicsLinearVelocity(LaunchDirection * InitialSpeed);
 	CollisionComp->WakeRigidBody();
+}
+
+void APongBall::OnBallHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit) {
+	if (!OtherActor || OtherActor == this || !CollisionComp) return;
+
+	// Check if the hit object is a paddle
+	if (OtherActor->ActorHasTag(TEXT("Paddle"))) {
+		// 1. Get current ball speed and calculate clean incremented speed
+		FVector CurrentVelocity = CollisionComp->GetPhysicsLinearVelocity();
+		float CurrentSpeed = CurrentVelocity.Size();
+
+		float NewSpeed = FMath::Min(CurrentSpeed + SpeedIncrement, MaxSpeed);
+
+		// 2. Determine horizontal direction strictly by spatial position (X-axis)
+		float DirectionX = (GetActorLocation().X >= OtherActor->GetActorLocation().X) ? 1.0f : -1.0f;
+
+		// 3. Calculate vertical bounce angle based on impact height relative to paddle center
+		float DeltaY = GetActorLocation().Y - OtherActor->GetActorLocation().Y;
+		float PaddleHalfHeight = 60.0f; // Adjust to match paddle extent
+		float NormalizedY = FMath::Clamp(DeltaY / PaddleHalfHeight, -1.0f, 1.0f);
+
+		// 4. Construct clean 2D direction vector on XY Plane
+		FVector NewDirection = FVector(DirectionX, NormalizedY, 0.0f).GetSafeNormal();
+
+		// 5. DIRECT OVERRIDE: Replaces all physics impulse calculated by moving paddles
+		CollisionComp->SetPhysicsLinearVelocity(NewDirection * NewSpeed);
+	}
+}
+
+void APongBall::SetPlayerNumber(int32 PN) {
+	this->PlayerNumber = PN;
 }
